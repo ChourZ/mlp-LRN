@@ -66,7 +66,7 @@ class VGGClassifier:
                                 if self.batch_norm_use:
                                     outputs = batch_norm(outputs, decay=0.99, scale=True,
                                                          center=True, is_training=training, renorm=False)
-                                outputs=tf.nn.lrn(outputs,4, bias=1.0, alpha=0.001 / 9.0, beta=0.75)
+                                outputs=tf.nn.lrn(outputs,2, bias=2, alpha=0.0001, beta=0.75)
                         if self.strided_dim_reduction==False:
                             outputs = tf.layers.max_pooling2d(outputs, pool_size=(2, 2), strides=2)
 
