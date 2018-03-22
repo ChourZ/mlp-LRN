@@ -1,0 +1,177 @@
+# Coder: Wenxin Xu
+# Github: https://github.com/wenxinxu/resnet_in_tensorflow
+# ==============================================================================
+import tarfile
+from six.moves import urllib
+import sys
+import numpy as np
+import pickle as cPickle
+import os
+import tensorflow as tf
+
+data_dir = 'cifar10_data'
+full_data_dir = 'cifar10_data/cifar-10-batches-py/data_batch_'
+vali_dir = 'cifar10_data/cifar-10-batches-py/data_batch_5'
+DATA_URL = 'http://www.cs.toronto.edu/~kriz/cifar-10-python.tar.gz'
+data_path = 'data/cifar10-train.npz'
+vali_path = 'data/cifar10-valid.npz'
+
+IMG_WIDTH = 32
+IMG_HEIGHT = 32
+IMG_DEPTH = 3
+NUM_CLASS = 10
+
+TRAIN_RANDOM_LABEL = False # Want to use random label for train data?
+VALI_RANDOM_LABEL = False # Want to use random label for validation?
+
+NUM_TRAIN_BATCH = 4 # How many batches of files you want to read in, from 0 to 5)
+EPOCH_SIZE = 10000 * NUM_TRAIN_BATCH
+
+
+def maybe_download_and_extract():
+    '''
+    Will download and extract the cifar10 data automatically
+    :return: nothing
+    '''
+    dest_directory = data_dir
+    if not os.path.exists(dest_directory):
+        os.makedirs(dest_directory)
+    filename = DATA_URL.split('/')[-1]
+    filepath = os.path.join(dest_directory, filename)
+    if not os.path.exists(filepath):
+        def _progress(count, block_size, total_size):
+            sys.stdout.write('\r>> Downloading %s %.1f%%' % (filename, float(count * block_size)
+                                                             / float(total_size) * 100.0))
+            sys.stdout.flush()
+        filepath, _ = urllib.request.urlretrieve(DATA_URL, filepath, _progress)
+        print()
+        statinfo = os.stat(filepath)
+        print('Successfully downloaded', filename, statinfo.st_size, 'bytes.')
+        tarfile.open(filepath, 'r:gz').extractall(dest_directory)
+
+
+def _read_one_batch(path):
+    '''
+    The training data contains five data batches in total. The validation data has only one
+    batch. This function takes the directory of one batch of data and returns the images and
+    corresponding labels as numpy arrays
+
+    :param path: the directory of one batch of data
+    :param is_random_label: do you want to use random labels?
+    :return: image numpy arrays and label numpy arrays
+    '''
+    loaded = np.load(path)
+    data, label = loaded['inputs'], loaded['targets']
+    return data, label
+
+
+def read_in_all_images(path, shuffle=True):
+    """
+    This function reads all training or validation data, shuffles them if needed, and returns the
+    images and the corresponding labels as numpy arrays
+
+    :param address_list: a list of paths of cPickle files
+    :return: concatenated numpy array of data and labels. Data are in 4D arrays: [num_images,
+    image_height, image_width, image_depth] and labels are in 1D arrays: [num_images]
+    """
+
+
+    data, label = _read_one_batch(path)
+
+    num_data = len(label)
+
+    # This reshape order is really important. Don't change
+    # Reshape is correct. Double checked
+    data = data.reshape((num_data, IMG_HEIGHT * IMG_WIDTH, IMG_DEPTH), order='F')
+    data = data.reshape((num_data, IMG_HEIGHT, IMG_WIDTH, IMG_DEPTH))
+
+
+    if shuffle is True:
+        print('Shuffling')
+        order = np.random.permutation(num_data)
+        data = data[order, ...]
+        label = label[order]
+
+    data = data.astype(np.float32)
+    return data, label
+
+
+def horizontal_flip(image, axis):
+    '''
+    Flip an image at 50% possibility
+    :param image: a 3 dimensional numpy array representing an image
+    :param axis: 0 for vertical flip and 1 for horizontal flip
+    :return: 3D image after flip
+    '''
+    print(image.size)
+    print(image.shape)
+    flip_prop = np.random.randint(low=0, high=2)
+    if flip_prop == 0:
+        image = tf.image.flip_left_right(image)
+
+    return image
+
+
+def whitening_image(image_np):
+    '''
+    Performs per_image_whitening
+    :param image_np: a 4D numpy array representing a batch of images
+    :return: the image numpy array after whitened
+    '''
+    for i in range(len(image_np)):
+        mean = np.mean(image_np[i, ...])
+        # Use adjusted standard deviation here, in case the std == 0.
+        std = np.max([np.std(image_np[i, ...]), 1.0/np.sqrt(IMG_HEIGHT * IMG_WIDTH * IMG_DEPTH)])
+        image_np[i,...] = (image_np[i, ...] - mean) / std
+    return image_np
+
+
+def random_crop_and_flip(batch_data, padding_size):
+    '''
+    Helper to random crop and random flip a batch of images
+    :param padding_size: int. how many layers of 0 padding was added to each side
+    :param batch_data: a 4D batch array
+    :return: randomly cropped and flipped image
+    '''
+    cropped_batch = np.zeros(len(batch_data) * IMG_HEIGHT * IMG_WIDTH * IMG_DEPTH).reshape(
+        len(batch_data), IMG_HEIGHT, IMG_WIDTH, IMG_DEPTH)
+
+    for i in range(len(batch_data)):
+        x_offset = np.random.randint(low=0, high=2 * padding_size, size=1)[0]
+        y_offset = np.random.randint(low=0, high=2 * padding_size, size=1)[0]
+        cropped_batch[i, ...] = batch_data[i, ...][x_offset:x_offset+IMG_HEIGHT,
+                      y_offset:y_offset+IMG_WIDTH, :]
+
+    return cropped_batch
+
+
+def prepare_train_data(padding_size):
+    '''
+    Read all the train data into numpy array and add padding_size of 0 paddings on each side of the
+    image
+    :param padding_size: int. how many layers of zero pads to add on each side?
+    :return: all the train data and corresponding labels
+    '''
+
+    data, label = read_in_all_images(data_path)
+    
+    pad_width = ((0, 0), (padding_size, padding_size), (padding_size, padding_size), (0, 0))
+    data = np.pad(data, pad_width=pad_width, mode='constant', constant_values=0)
+    
+    return data, label
+
+
+def read_validation_data():
+    '''
+    Read in validation data. Whitening at the same time
+    :return: Validation image data as 4D numpy array. Validation labels as 1D numpy array
+    '''
+    validation_array, validation_labels = read_in_all_images(vali_path)
+    validation_array = whitening_image(validation_array)
+
+    return validation_array, validation_labels
+
+data, label = prepare_train_data(padding_size=2)
+print(data.shape,label.shape)
+data, label = read_validation_data()
+print(data.shape,label.shape)
